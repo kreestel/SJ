@@ -1,0 +1,2 @@
+import { JourneyScreen } from '@/components/journey-screen';
+export default async function Page({params}:{params:Promise<{token:string}>}){return <JourneyScreen id={(await params).token} follower/>;}
