@@ -1,6 +1,7 @@
 import 'server-only';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cookies } from 'next/headers';
+import { isAllowedOrigin } from '../request-origin';
 export const token=()=>randomBytes(32).toString('base64url');
 export const hash=(raw:string)=>createHash('sha256').update(raw).digest('hex');
 export async function owner(create=false){
@@ -11,9 +12,7 @@ export async function owner(create=false){
 export function equal(a:string,b:string){const x=Buffer.from(a);const y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y);}
 export class ApiError extends Error{constructor(public status:number,message:string){super(message);}}
 export function sameOrigin(request:Request){
-  const origin=request.headers.get('origin');
-  const expected=new URL(process.env.NEXT_PUBLIC_APP_URL||request.url).origin;
-  if(origin && origin!==expected)throw new ApiError(403,'Request origin is not allowed.');
+  if(!isAllowedOrigin(request,process.env.NEXT_PUBLIC_APP_URL))throw new ApiError(403,'Request origin is not allowed.');
 }
 const requests=new Map<string,{count:number;reset:number}>();
 export function rateLimit(key:string,limit=120){
