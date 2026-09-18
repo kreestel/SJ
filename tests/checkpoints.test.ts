@@ -16,6 +16,29 @@ describe('checkpoint progress',()=>{
   it('validates destinations, unique checkpoint IDs and the five-stop limit',()=>{const j=journey();expect(createSchema.safeParse({...j,end:undefined}).success).toBe(false);expect(createSchema.safeParse({...j,checkpoints:[j.checkpoints![0],j.checkpoints![0]]}).success).toBe(false);expect(createSchema.safeParse({...j,checkpoints:Array.from({length:6},()=>({...j.checkpoints![0],id:crypto.randomUUID()}))}).success).toBe(false);});
 });
 describe('checkpoint delivery',()=>{
+  it('notifies arrival and explicit safety on a journey without checkpoints',()=>{
+    const j=journey();j.checkpoints=[];subscriber(j);
+    acceptEvents(j,[{...location(),point:j.end}],now+2000);
+    const [arrival]=claimDeliveries(j,now+3000);
+    expect(arrival.event.type).toBe('ARRIVAL_DETECTED');
+    expect(checkpointNotification(j,arrival.event).body).toContain('not yet confirmed');
+    acceptEvents(j,[{id:crypto.randomUUID(),type:'SAFE_CONFIRMED',sequence:2,occurredAt:new Date(now+4000).toISOString()}],now+5000);
+    const tasks=claimDeliveries(j,now+6000);
+    expect(tasks.map(t=>t.event.type)).toEqual(['SAFE_CONFIRMED']);
+    expect(checkpointNotification(j,tasks[0].event).title).toContain('arrived safely');
+  });
+  it('records arrival after escalation without clearing the alert or duplicating arrival',()=>{
+    const j=journey();j.status='ESCALATED';const event={...location(),point:j.end};
+    acceptEvents(j,[event],now+2000);acceptEvents(j,[event],now+3000);
+    expect(j.status).toBe('ESCALATED');expect(j.events.filter(e=>e.type==='ARRIVAL_DETECTED')).toHaveLength(1);
+    expect(publicView(j).events.some(e=>e.type==='ARRIVAL_DETECTED')).toBe(true);
+  });
+  it('records arrival during grace and keeps the overdue deadline',()=>{
+    const j=journey();j.status='GRACE_PERIOD';const deadline=j.expectedAt;
+    acceptEvents(j,[{...location(),point:j.end}],now+2000);
+    expect(j.status).toBe('GRACE_PERIOD');expect(j.expectedAt).toBe(deadline);
+    expect(j.events.some(e=>e.type==='ARRIVAL_DETECTED')).toBe(true);
+  });
   it('leases work to prevent concurrent sends and retries an expired lease',()=>{const j=journey();subscriber(j);acceptEvents(j,[location()],now+2000);expect(claimDeliveries(j,now+3000)).toHaveLength(1);expect(claimDeliveries(j,now+4000)).toHaveLength(0);expect(claimDeliveries(j,now+64000)).toHaveLength(1);});
   it('does not resend provider-accepted events or notify for visits before subscription',()=>{const j=journey();subscriber(j);acceptEvents(j,[location()],now+2000);const [task]=claimDeliveries(j,now+3000);j.subscriptions![0].delivery[task.event.id].state='sent';expect(claimDeliveries(j,now+99999)).toHaveLength(0);j.subscriptions![0].delivery={};j.subscriptions![0].since=new Date(now+10000).toISOString();expect(claimDeliveries(j,now+99999)).toHaveLength(0);});
   it('never exposes subscriptions, addresses, names, or bearer tokens in push payloads',()=>{const j=journey();subscriber(j);acceptEvents(j,[location()],now+2000);expect(publicView(j)).not.toHaveProperty('subscriptions');const text=JSON.stringify(checkpointNotification(j,j.events.find(e=>e.type==='CHECKPOINT_REACHED')!));expect(text).not.toContain('Private');expect(text).not.toContain('owner');expect(text).not.toContain('share');});

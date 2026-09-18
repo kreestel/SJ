@@ -18,7 +18,7 @@ In Vercel → Project → Settings → Environment Variables, copy the values fr
 
 Redeploy after setting them. Keep the same key pair across deploys or contacts must resubscribe. Supabase's existing `journey_documents` JSON storage supports this change without a migration. Older journeys remain readable and have no checkpoints.
 
-The contact opens the private link and taps **Enable checkpoint notifications**. On iPhone/iPad (16.4+), add the app to the Home Screen and open the private journey link in that installed app before enabling. On supported Android/desktop browsers, approve notifications when prompted. Permission is requested only after a button tap. The contact can turn notifications off for an individual journey.
+The contact opens the private link and taps **Enable journey notifications**. On iPhone/iPad (16.4+), add the app to the Home Screen and open the private journey link in that installed app before enabling. On supported Android/desktop browsers, approve notifications when prompted. Permission is requested only after a button tap. The contact can turn notifications off for an individual journey.
 
 ## What is delivered
 
@@ -26,7 +26,7 @@ Checkpoint Web Push can arrive with the contact page closed. The traveller app m
 
 Subscriptions and delivery attempts are private server-only fields, removed with the journey after 24 hours by the existing cleanup job. Expired push endpoints are removed after a 404/410 provider response. Provider acceptance does not prove device receipt. A 60-second delivery lease prevents concurrent sends; retries use backoff. In the rare crash between provider acceptance and recording success, a retry can occur; a stable notification tag reduces duplicate display.
 
-Delivery is attempted after traveller event uploads and retried on subsequent traveller/follower requests or the protected jobs endpoint. Pending retries stop when there are no further requests; configure an external scheduled caller to that endpoint for independent retries if needed. Existing database cron evaluates missed check-ins but does not dispatch Web Push. **This feature sends checkpoint notifications only; SOS and missed-check-in alerts still require the contact tracking page.** If keys are missing or permission is blocked, the UI explains the limitation instead of claiming notification delivery.
+Delivery is attempted after traveller event uploads and retried on subsequent traveller/follower requests or the protected jobs endpoint. Pending retries stop when there are no further requests; configure an external scheduled caller to that endpoint for independent retries if needed. Existing database cron evaluates missed check-ins but does not dispatch Web Push. **This feature sends checkpoint, destination-reached, and explicit safe-arrival notifications; SOS and missed-check-in alerts still require the contact tracking page.** If keys are missing or permission is blocked, the UI explains the limitation instead of claiming notification delivery.
 
 ## Test on two devices
 

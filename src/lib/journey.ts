@@ -79,12 +79,14 @@ export function acceptEvents(j:Journey, events:ClientEvent[], now:number) {
     if(e.type==='JOURNEY_CANCELLED') {j.status='CANCELLED';j.completedAt=new Date(now).toISOString();}
   }
   detectCheckpoints(j,now);
-  if(j.status==='ACTIVE') {
-    const points=orderedLocations(j).filter(e=>(e.accuracy??1000)<=100);
+  if(!isClosed(j)&&j.status!=='DRAFT'&&!j.events.some(e=>e.type==='ARRIVAL_DETECTED')) {
+    const points=orderedLocations(j);
     const last=points.at(-1);
     const previous=points.at(-2);
-    if(last?.point && distance(last.point,j.end)<=100 && ((last.accuracy??1000)<=25 || (previous?.point && distance(previous.point,j.end)<=100))) {
-      j.status='ARRIVAL_DETECTED';record(j,'ARRIVAL_DETECTED',now);
+    if(last?.point && (last.accuracy??Infinity)<=100 && distance(last.point,j.end)<=100 && ((last.accuracy??Infinity)<=25 || (previous?.point && (previous.accuracy??Infinity)<=100 && Date.parse(last.occurredAt)-Date.parse(previous.occurredAt)<=120000 && distance(previous.point,j.end)<=100))) {
+      // Location is independent of overdue/SOS state; never clear an active alert.
+      if(j.status==='ACTIVE')j.status='ARRIVAL_DETECTED';
+      j.events.push({id:crypto.randomUUID(),type:'ARRIVAL_DETECTED',occurredAt:last.occurredAt,receivedAt:new Date(now).toISOString(),sequence:last.sequence});
     }
   }
   return result;

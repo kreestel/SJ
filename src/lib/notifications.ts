@@ -10,13 +10,17 @@ export function checkpointNotification(j:Journey,event:JourneyEvent){
   const index=(j.checkpoints??[]).findIndex(c=>c.id===event.checkpointId);
   const delayed=Date.parse(event.receivedAt)-Date.parse(event.occurredAt)>60000;
   // Avoid names and precise locations appearing on a locked phone.
-  return {title:'SafeJourney checkpoint update',body:`Checkpoint ${index+1} of ${j.checkpoints?.length??0} reached.${delayed?' Synced after a delay.':''} Open your saved journey link for details.`,tag:`sj-${j.id}-${event.id}`,journeyId:j.id,occurredAt:event.occurredAt};
+  const arrival=event.type==='ARRIVAL_DETECTED';
+  const safe=event.type==='SAFE_CONFIRMED';
+  const title=safe?'SafeJourney — arrived safely':arrival?'SafeJourney — destination reached':'SafeJourney checkpoint update';
+  const body=safe?'The traveller confirmed safe arrival. Location sharing has ended.':arrival?'GPS recorded the traveller near the destination. Safe arrival is not yet confirmed.':`Checkpoint ${index+1} of ${j.checkpoints?.length??0} reached.`;
+  return {title,body:`${body}${delayed?' Synced after a delay.':''} Open your saved journey link for details.`,tag:`sj-${j.id}-${event.id}`,journeyId:j.id,occurredAt:event.occurredAt};
 }
 export function claimDeliveries(j:Journey,now:number){
   const claimed:{subscription:ContactSubscription;event:JourneyEvent}[]=[];
   if(j.status==='CANCELLED'||Date.parse(j.expiresAt)<=now)return claimed;
   for(const subscription of j.subscriptions??[]){
-    for(const event of j.events.filter(e=>e.type==='CHECKPOINT_REACHED'&&Date.parse(e.receivedAt)>=Date.parse(subscription.since))){
+    for(const event of j.events.filter(e=>['CHECKPOINT_REACHED','ARRIVAL_DETECTED','SAFE_CONFIRMED'].includes(e.type)&&!(j.status==='COMPLETED'&&e.type==='ARRIVAL_DETECTED')&&Date.parse(e.receivedAt)>=Date.parse(subscription.since))){
       const delivery=subscription.delivery[event.id];
       if(delivery?.state==='sent'||(delivery?.leaseUntil??0)>now)continue;
       if(claimed.length>=10)return claimed;
