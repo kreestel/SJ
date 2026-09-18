@@ -1,12 +1,16 @@
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { acceptEvents, createSchema, evaluate, eventSchema, isClosed, publicView, record, type Journey } from '@/lib/journey';
 import { allIds, cleanup, find, insert, mutate, storageMode } from '@/lib/server/store';
 import { ApiError, equal, hash, owner, rateLimit, sameOrigin, token } from '@/lib/server/security';
+import { subscriptionSchema } from '@/lib/notifications';
+import { dispatchCheckpointNotifications, pushConfig } from '@/lib/server/push';
 export const runtime='nodejs';
+export const maxDuration=30;
 export const dynamic='force-dynamic';
 type Context={params:Promise<{path:string[]}>};
 const json=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'no-store'}});
+const notify=(id:string)=>after(async()=>{try{await dispatchCheckpointNotifications(id);}catch{console.error('Checkpoint notification dispatch needs retry.');}});
 async function body(request:Request){const text=await request.text();if(text.length>64000)throw new ApiError(413,'Request is too large.');return JSON.parse(text);}
 async function accessible(field:'id'|'shareHash'|'ackHash',value:string){const j=await find(field,value);if(!j||Date.parse(j.expiresAt)<=Date.now()||j.status==='CANCELLED')throw new ApiError(404,'This journey link has expired or is unavailable.');return j;}
 async function handle(request:Request,{params}:Context){
@@ -14,10 +18,28 @@ async function handle(request:Request,{params}:Context){
   if(method==='POST')sameOrigin(request);
   rateLimit(hash(request.headers.get('x-forwarded-for')?.split(',')[0]||'local'),300);
   if(p[0]==='health')return json({storage:storageMode(),demo:process.env.NEXT_PUBLIC_DEMO_MODE==='true'});
+  if(p[0]==='push-config'&&method==='GET')return json({publicKey:pushConfig()?.publicKey??null});
+  if(p[0]==='follow'&&p[1]&&p[2]==='subscription'&&method==='POST'){
+    const j=await accessible('shareHash',hash(p[1]));
+    if(isClosed(j))throw new ApiError(409,'This journey has ended.');
+    if(!pushConfig())throw new ApiError(503,'Checkpoint notifications are not configured on this server yet.');
+    const input=z.object({subscription:subscriptionSchema,remove:z.boolean().optional()}).parse(await body(request));
+    const id=hash(input.subscription.endpoint);
+    await mutate(j.id,current=>{
+      if(isClosed(current))throw new ApiError(409,'This journey has ended.');
+      current.subscriptions??=[];
+      if(input.remove){current.subscriptions=current.subscriptions.filter(s=>s.id!==id);return;}
+      const existing=current.subscriptions.find(s=>s.id===id);
+      if(existing){existing.keys=input.subscription.keys;return;}
+      if(current.subscriptions.length>=5)throw new ApiError(409,'This journey already has five notification devices.');
+      current.subscriptions.push({id,...input.subscription,since:new Date(now).toISOString(),delivery:{}});
+    });
+    return json({enabled:!input.remove});
+  }
   if(p[0]==='jobs'&&p[1]==='evaluate-escalations'){
     const secret=process.env.JOB_SECRET;
     if(!secret||!equal(request.headers.get('authorization')||'',`Bearer ${secret}`))throw new ApiError(401,'Unauthorized');
-    let evaluated=0;for(const id of await allIds()){await mutate(id,j=>evaluate(j,now));evaluated++;}await cleanup();return json({evaluated});
+    let evaluated=0;for(const id of await allIds()){await mutate(id,j=>evaluate(j,now));notify(id);evaluated++;}await cleanup();return json({evaluated});
   }
   if(p[0]==='journeys'&&p.length===1&&method==='POST'){
     const input=createSchema.parse(await body(request));
@@ -32,7 +54,7 @@ async function handle(request:Request,{params}:Context){
   if(p[0]==='journeys'&&p[1]){
     const j=await find('id',p[1]);if(!j||j.ownerHash!==await owner()||Date.parse(j.expiresAt)<=now)throw new ApiError(404,'Journey not found.');
     if(method==='GET'){
-      const updated=await mutate(j.id,current=>evaluate(current,now));return json(publicView(updated.journey));
+      const updated=await mutate(j.id,current=>evaluate(current,now));notify(j.id);return json(publicView(updated.journey));
     }
     if(p[2]==='start'&&method==='POST'){
       const updated=await mutate(j.id,current=>{if(current.status!=='DRAFT')return;current.status='ACTIVE';current.startedAt=new Date(now).toISOString();current.expectedAt=new Date(now+current.durationMinutes*60000).toISOString();record(current,'JOURNEY_STARTED',now);});
@@ -40,11 +62,12 @@ async function handle(request:Request,{params}:Context){
     }
     if(p[2]==='events'&&method==='POST'){
       const input=z.object({events:z.array(eventSchema).min(1).max(50)}).parse(await body(request));
-      const updated=await mutate(j.id,current=>acceptEvents(current,input.events,now));return json({...updated.result,journey:publicView(updated.journey)});
+      const updated=await mutate(j.id,current=>acceptEvents(current,input.events,now));notify(j.id);return json({...updated.result,journey:publicView(updated.journey)});
     }
   }
   if(p[0]==='follow'&&p[1]&&method==='GET'){
     const j=await accessible('shareHash',hash(p[1]));const updated=await mutate(j.id,current=>evaluate(current,now));
+    notify(j.id);
     if(isClosed(updated.journey))return json({closed:true,name:j.name,status:updated.journey.status,completedAt:updated.journey.completedAt,expiresAt:j.expiresAt});
     return json(publicView(updated.journey));
   }

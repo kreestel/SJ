@@ -1,4 +1,6 @@
 'use client';
+/* Full document navigation populates the offline page cache. */
+/* eslint-disable @next/next/no-html-link-for-pages */
 import { ShieldCheck, Route, ArrowUpRight, Heart, Radio, ArrowLeft } from 'lucide-react';
 import { useEffect } from 'react';
 export function Shell({children,active='overview',back=false}:{children:React.ReactNode;active?:string;back?:boolean}){

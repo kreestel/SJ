@@ -2,11 +2,15 @@ import { z } from 'zod';
 
 export const pointSchema = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
 export type Point = z.infer<typeof pointSchema>;
+export const checkpointSchema = z.object({id:z.uuid(),name:z.string().trim().min(1).max(80),point:pointSchema});
+export type Checkpoint = z.infer<typeof checkpointSchema>;
 export const createSchema = z.object({
   name: z.string().trim().min(1).max(60),
   destination: z.string().trim().min(1).max(120),
   contactName: z.string().trim().min(1).max(60),
   start: pointSchema, end: pointSchema,
+  startLabel: z.string().trim().min(1).max(120).optional(),
+  checkpoints: z.array(checkpointSchema).max(5).refine(points=>new Set(points.map(p=>p.id)).size===points.length,'Checkpoint identifiers must be unique.').optional(),
   durationMinutes: z.number().min(1).max(720),
   graceSeconds: z.number().int().min(10).max(1800),
   responseSeconds: z.number().int().min(10).max(600),
@@ -25,14 +29,16 @@ export const eventSchema = z.object({
 });
 export type ClientEvent = z.infer<typeof eventSchema>;
 export type Status = 'DRAFT' | 'ACTIVE' | 'ARRIVAL_DETECTED' | 'GRACE_PERIOD' | 'CHECK_IN_DUE' | 'ESCALATED' | 'SOS' | 'COMPLETED' | 'CANCELLED';
-export type JourneyEvent = {id:string; type:string; occurredAt:string; receivedAt:string; sequence:number; point?:Point; accuracy?:number};
+export type JourneyEvent = {id:string; type:string; occurredAt:string; receivedAt:string; sequence:number; point?:Point; accuracy?:number; checkpointId?:string};
+export type ContactSubscription = {id:string; endpoint:string; keys:{p256dh:string;auth:string}; since:string; delivery:Record<string,{state:'sending'|'sent'|'retry';leaseUntil:number;attempts:number}>};
 export type Journey = CreateInput & {
   id: string; ownerHash: string; shareHash: string; ackHash: string;
   status: Status; createdAt: string; startedAt?: string; expectedAt?:string;
   expiresAt: string; completedAt?:string; escalatedAt?:string; acknowledgedAt?:string;
   events: JourneyEvent[];
+  subscriptions?:ContactSubscription[];
 };
-export type PublicJourney = Omit<Journey, 'ownerHash'|'shareHash'|'ackHash'|'contactName'>;
+export type PublicJourney = Omit<Journey, 'ownerHash'|'shareHash'|'ackHash'|'contactName'|'subscriptions'>;
 export const isClosed = (j: Pick<Journey,'status'>) => ['COMPLETED','CANCELLED'].includes(j.status);
 export function distance(a: Point, b:Point) {
   const rad = Math.PI/180;
@@ -72,6 +78,7 @@ export function acceptEvents(j:Journey, events:ClientEvent[], now:number) {
     if(e.type==='SOS_TRIGGERED') {j.status='SOS';j.escalatedAt=new Date(now).toISOString();j.acknowledgedAt=undefined;}
     if(e.type==='JOURNEY_CANCELLED') {j.status='CANCELLED';j.completedAt=new Date(now).toISOString();}
   }
+  detectCheckpoints(j,now);
   if(j.status==='ACTIVE') {
     const points=orderedLocations(j).filter(e=>(e.accuracy??1000)<=100);
     const last=points.at(-1);
@@ -84,6 +91,20 @@ export function acceptEvents(j:Journey, events:ClientEvent[], now:number) {
 }
 export function publicView(j:Journey):PublicJourney {
   // Explicit allowlist: never expose bearer hashes or contact details.
-  return {id:j.id,name:j.name,destination:j.destination,start:j.start,end:j.end,durationMinutes:j.durationMinutes,graceSeconds:j.graceSeconds,responseSeconds:j.responseSeconds,demo:j.demo,status:j.status,createdAt:j.createdAt,startedAt:j.startedAt,expectedAt:j.expectedAt,expiresAt:j.expiresAt,completedAt:j.completedAt,escalatedAt:j.escalatedAt,acknowledgedAt:j.acknowledgedAt,events:j.events};
+  return {id:j.id,name:j.name,destination:j.destination,start:j.start,end:j.end,startLabel:j.startLabel,checkpoints:j.checkpoints??[],durationMinutes:j.durationMinutes,graceSeconds:j.graceSeconds,responseSeconds:j.responseSeconds,demo:j.demo,status:j.status,createdAt:j.createdAt,startedAt:j.startedAt,expectedAt:j.expectedAt,expiresAt:j.expiresAt,completedAt:j.completedAt,escalatedAt:j.escalatedAt,acknowledgedAt:j.acknowledgedAt,events:j.events};
+}
+export function detectCheckpoints(j:Journey, now:number){
+  if(j.status==='CANCELLED'||j.status==='DRAFT')return;
+  const locations=orderedLocations(j);
+  for(const checkpoint of j.checkpoints??[]){
+    if(j.events.some(e=>e.type==='CHECKPOINT_REACHED'&&e.checkpointId===checkpoint.id))continue;
+    const hit=locations.find((e,index)=>{
+      if(!e.point||(e.accuracy??Infinity)>100||distance(e.point,checkpoint.point)>100)return false;
+      if((e.accuracy??Infinity)<=25)return true;
+      const previous=locations[index-1];
+      return !!previous?.point&&(previous.accuracy??Infinity)<=100&&distance(previous.point,checkpoint.point)<=100&&Date.parse(e.occurredAt)-Date.parse(previous.occurredAt)<=120000;
+    });
+    if(hit)j.events.push({id:crypto.randomUUID(),type:'CHECKPOINT_REACHED',checkpointId:checkpoint.id,occurredAt:hit.occurredAt,sequence:hit.sequence,receivedAt:new Date(now).toISOString()});
+  }
 }
 export const statusLabel:Record<Status,string>={DRAFT:'Ready when you are',ACTIVE:'On the way',ARRIVAL_DETECTED:'Time to check in',GRACE_PERIOD:'Past expected arrival',CHECK_IN_DUE:'Check-in needed',ESCALATED:'Check-in missed',SOS:'Help requested',COMPLETED:'Arrived safely',CANCELLED:'Journey cancelled'};

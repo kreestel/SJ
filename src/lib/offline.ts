@@ -19,7 +19,7 @@ export async function sync(journeyId:string){
   active=(async()=>{
     while(navigator.onLine){
       const events=orderQueue((await pending(journeyId)).filter(e=>!e.error)).slice(0,50);if(!events.length)return;
-      const response=await fetch(`/api/journeys/${journeyId}/events`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({events:events.map(({journeyId:_,error:__,...event})=>event)})});
+      const response=await fetch(`/api/journeys/${journeyId}/events`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({events:events.map(e=>({id:e.id,type:e.type,occurredAt:e.occurredAt,sequence:e.sequence,point:e.point,accuracy:e.accuracy}))})});
       if(!response.ok)throw new Error('Updates are saved on this device. Waiting to sync.');
       const result=await response.json();const database=await db();const tx=database.transaction('events','readwrite');
       for(const id of [...result.accepted,...result.duplicates])await tx.store.delete(id);

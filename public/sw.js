@@ -1,4 +1,4 @@
-const CACHE='safejourney-shell-v1';
+const CACHE='safejourney-shell-v2';
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(['/','/icon.svg','/manifest.webmanifest'])));self.skipWaiting();});
 self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',event=>{
@@ -9,4 +9,14 @@ self.addEventListener('fetch',event=>{
   }else if(url.pathname.startsWith('/_next/static/')||url.pathname==='/icon.svg'){
     event.respondWith(caches.match(event.request).then(cached=>cached||fetch(event.request).then(response=>{if(response.ok){const copy=response.clone();caches.open(CACHE).then(cache=>cache.put(event.request,copy));}return response;})));
   }
+});
+self.addEventListener('push',event=>{
+  let data={};try{data=event.data?.json()||{};}catch{/* Always display a visible notification. */}
+  event.waitUntil(self.registration.showNotification(data.title||'SafeJourney update',{body:data.body||'A journey update is available.',icon:'/icon.svg',tag:data.tag||'safejourney-update',data:{journeyId:data.journeyId}}));
+});
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const id=event.notification.data?.journeyId;
+  const url=id?`/notification?journey=${encodeURIComponent(id)}`:'/';
+  event.waitUntil(self.clients.openWindow(url));
 });
